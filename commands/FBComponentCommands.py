@@ -5,10 +5,6 @@ import os
 import lldb
 import fblldbbase as fb
 
-def lldbinit():
-  # Tell LLDB to print CKComponentAction as a c-string
-  lldb.debugger.HandleCommand('type summary add --summary-string "${var%c-string}" CKComponentAction')
-
 def lldbcommands():
   return [
     FBComponentsDebugCommand(),
@@ -32,10 +28,10 @@ class FBComponentsDebugCommand(fb.FBCommand):
 
   def run(self, arguments, options):
     if options.set:
-      lldb.debugger.HandleCommand('eobjc (void)[CKComponentDebugController setDebugMode:YES]')
+      fb.evaluateEffect('[CKComponentDebugController setDebugMode:YES]')
       print 'Debug mode for ComponentKit has been set.'
     elif options.unset:
-      lldb.debugger.HandleCommand('eobjc (void)[CKComponentDebugController setDebugMode:NO]')
+      fb.evaluateEffect('[CKComponentDebugController setDebugMode:NO]')
       print 'Debug mode for ComponentKit has been unset.'
     else:
       print 'No option for ComponentKit Debug mode specified.'
@@ -60,24 +56,15 @@ class FBComponentsPrintCommand(fb.FBCommand):
     upwards = 'YES' if options.upwards else 'NO'
     showViews = 'YES' if options.showViews == 'YES' else 'NO'
 
-    lldb.debugger.HandleCommand('poobjc (id)[CKComponentHierarchyDebugHelper componentHierarchyDescriptionForView:(UIView *)' + arguments[0] + ' searchUpwards:' + upwards + ' showViews:' + showViews + ']')
+    view = fb.evaluateInputExpression(arguments[0])
+    print fb.describeObject('[CKComponentHierarchyDebugHelper componentHierarchyDescriptionForView:(UIView *)' + view + ' searchUpwards:' + upwards + ' showViews:' + showViews + ']')
 
 class FBComponentsReflowCommand(fb.FBCommand):
   def name(self):
     return 'rcomponents'
 
   def description(self):
-    return 'Synchronously reflow and update root components found starting from <aView>.'
-
-  def options(self):
-    return [ fb.FBCommandArgument(short='-u', long='--up', arg='upwards', boolean=True, default=False, help='Reflow only the root components found on the first superview that has them, carrying the search up to its window.') ]
-
-  def args(self):
-    return [ fb.FBCommandArgument(arg='aView', type='UIView*', help='The view to from which the search for the root components begins.', default='(id)[[UIApplication sharedApplication] keyWindow]') ]
+    return 'Synchronously reflow and update all components.'
 
   def run(self, arguments, options):
-    upwards = 'NO'
-    if options.upwards:
-      upwards = 'YES'
-
-    lldb.debugger.HandleCommand('e (void)[CKComponentDebugController reflowComponentsForView:(UIView *)' + arguments[0] + ' searchUpwards:' + upwards + ']')
+    fb.evaluateEffect('[CKComponentDebugController reflowComponents]')
