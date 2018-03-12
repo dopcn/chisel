@@ -15,6 +15,9 @@ def lldbcommands():
     FBMethodBreakpointCommand(),
     FBMemoryWarningCommand(),
     FBFindInstancesCommand(),
+    FBMethodBreakpointEnableCommand(),
+    FBMethodBreakpointDisableCommand(),
+    FBSequenceCommand(),
   ]
 
 class FBWatchInstanceVariableCommand(fb.FBCommand):
@@ -189,9 +192,93 @@ class FBMemoryWarningCommand(fb.FBCommand):
     fb.evaluateEffect('[[UIApplication sharedApplication] performSelector:@selector(_performMemoryWarning)]')
 
 
+def switchBreakpointState(expression,on):
+
+  expression_pattern = re.compile(r'{}'.format(expression),re.I)
+
+  target = lldb.debugger.GetSelectedTarget()
+  for breakpoint in target.breakpoint_iter():
+    if breakpoint.IsEnabled() != on and (expression_pattern.search(str(breakpoint))):
+      print str(breakpoint)
+      breakpoint.SetEnabled(on)      
+    for location in breakpoint:
+      if location.IsEnabled() != on and (expression_pattern.search(str(location)) or expression == hex(location.GetAddress()) ):
+        print str(location)
+        location.SetEnabled(on)
+
+class FBMethodBreakpointEnableCommand(fb.FBCommand):
+  def name(self):
+    return 'benable'
+
+  def description(self):
+    return """
+    Enable a set of breakpoints for a regular expression
+
+    Examples:
+
+          * benable ***address***
+          benable 0x0000000104514dfc
+          benable 0x183e23564
+
+          #use `benable *filename*` to switch all breakpoints in this file to `enable`
+          benable SUNNetService.m 
+
+          #use `benable ***module(AppName)***` to switch all breakpoints in this module to `enable`
+          benable UIKit
+          benable Foundation 
+
+    """
+
+  def args(self):
+    return [
+      fb.FBCommandArgument(arg='expression', type='string', help='Expression to enable breakpoint'),
+    ]
+
+  def run(self, arguments, options):
+    expression = arguments[0]
+    switchBreakpointState(expression,True)
+
+class FBMethodBreakpointDisableCommand(fb.FBCommand):
+  def name(self):
+    return 'bdisable'
+
+  def description(self):
+    return """
+    Disable a set of breakpoints for a regular expression
+
+    Examples:
+
+          * bdisable ***address***
+          bdisable 0x0000000104514dfc
+          bdisable 0x183e23564
+
+          #use `bdisable *filename*` to switch all breakpoints in this file to `disable`
+          bdisable SUNNetService.m 
+
+          #use `bdisable ***module(AppName)***` to switch all breakpoints in this module to `disable`
+          bdisable UIKit
+          bdisable Foundation 
+
+    """
+  def args(self):
+    return [
+      fb.FBCommandArgument(arg='expression', type='string', help='Expression to disable breakpoint'),
+    ]
+
+  def run(self, arguments, options):
+    expression = arguments[0]
+    switchBreakpointState(expression,False)
+
 class FBFindInstancesCommand(fb.FBCommand):
   def name(self):
     return 'findinstances'
+
+  def args(self):
+    return [
+      fb.FBCommandArgument(arg='type', help='Class or protocol name'),
+      fb.FBCommandArgument(arg='query', default=' ', # space is a hack to mark optional
+                           help='Query expression, uses NSPredicate syntax')
+    ]
 
   def description(self):
     return """
@@ -227,6 +314,11 @@ class FBFindInstancesCommand(fb.FBCommand):
     as seen above, see https://github.com/facebook/chisel/wiki/findinstances.
     """
 
+  def lex(self, commandLine):
+    # Can't use default shlex splitting because it strips quotes, which results
+    # in invalid NSPredicate syntax. Split the input into type and rest (query).
+    return commandLine.split(' ', 1)
+
   def run(self, arguments, options):
     if not self.loadChiselIfNecessary():
       return
@@ -235,16 +327,10 @@ class FBFindInstancesCommand(fb.FBCommand):
       print 'Usage: findinstances <classOrProtocol> [<predicate>]; Run `help findinstances`'
       return
 
-    # Unpack the arguments by hand. The input is entirely in arguments[0].
-    args = arguments[0].strip().split(' ', 1)
-
-    query = args[0]
-    if len(args) > 1:
-      predicate = args[1].strip()
-      # Escape double quotes and backslashes.
-      predicate = re.sub('([\\"])', r'\\\1', predicate)
-    else:
-      predicate = ''
+    query = arguments[0]
+    predicate = arguments[1].strip()
+    # Escape double quotes and backslashes.
+    predicate = re.sub('([\\"])', r'\\\1', predicate)
     call = '(void)PrintInstances("{}", "{}")'.format(query, predicate)
     fb.evaluateExpressionValue(call)
 
@@ -292,3 +378,30 @@ class FBFindInstancesCommand(fb.FBCommand):
     source_dir = os.path.dirname(source_path)
     # ugh: ../.. is to back out of commands/, then back out of libexec/
     return os.path.join(source_dir, '..', '..', 'lib', 'Chisel.framework', 'Chisel')
+
+
+class FBSequenceCommand(fb.FBCommand):
+  def name(self):
+    return 'sequence'
+
+  def description(self):
+    return 'Run commands in sequence, stopping on any error.'
+
+  def lex(self, commandLine):
+    return commandLine.split(';')
+
+  def run(self, arguments, options):
+    interpreter = lldb.debugger.GetCommandInterpreter()
+    # The full unsplit command is in position 0.
+    sequence = arguments[1:]
+    for command in sequence:
+      object = lldb.SBCommandReturnObject()
+      interpreter.HandleCommand(command.strip(), self.context, object)
+      if object.GetOutput():
+        print >>self.result, object.GetOutput().strip()
+
+      if not object.Succeeded():
+        if object.GetError():
+          self.result.SetError(object.GetError())
+        self.result.SetStatus(object.GetStatus())
+        return
